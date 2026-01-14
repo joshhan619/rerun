@@ -46,8 +46,10 @@ pub fn detect_av1_keyframe_start(data: &[u8]) -> Result<GopStartDetection, Detec
                 let seq = SequenceHeaderObu::parse(header, &mut cursor)
                     .map_err(DetectGopStartError::Av1ParserError)?;
 
+                let codec_string = build_av1_codec_string(&seq);
+
                 video_encoding_details = Some(VideoEncodingDetails {
-                    codec_string: "av01".to_owned(),
+                    codec_string,
                     coded_dimensions: [seq.max_frame_width as u16, seq.max_frame_height as u16],
                     bit_depth: Some(seq.color_config.bit_depth as u8),
                     chroma_subsampling: Some(chroma_mode_from_color_config(&seq.color_config)),
@@ -108,6 +110,50 @@ fn is_keyframe<R: io::Read>(reader: &mut R) -> io::Result<bool> {
     // 3 = SWITCH_FRAME
     let frame_type = reader.read_bits(2)?;
     Ok(frame_type == 0)
+}
+
+/// Builds a fully qualified AV1 codec string for WebCodecs.
+///
+/// Format: `av01.P.LLT.DD`
+/// - P = profile (0, 1, or 2)
+/// - LL = level (e.g., 04, 08, 10, etc.)
+/// - T = tier (M for Main, H for High)
+/// - DD = bit depth (08, 10, 12)
+///
+/// See: https://www.w3.org/TR/webcodecs-av1-codec-registration/#fully-qualified-codec-strings
+fn build_av1_codec_string(seq: &SequenceHeaderObu) -> String {
+    let profile = seq.seq_profile;
+
+    let operating_point = seq
+        .operating_points
+        .first()
+        .expect("AV1 sequence header must have at least one operating point");
+
+    // seq_level_idx maps to AV1 levels: 0=2.0, 1=2.1, 2=2.2, 3=2.3, 4=3.0, 5=3.1, etc.
+    // WebCodecs level format: major*2 + minor (e.g., 2.0=04, 2.1=05, 3.0=06, 4.0=08)
+    let level_idx = operating_point.seq_level_idx;
+    let (major, minor) = match level_idx {
+        0..=3 => (2, level_idx),           // 2.0-2.3
+        4..=7 => (3, level_idx - 4),       // 3.0-3.3
+        8..=11 => (4, level_idx - 8),      // 4.0-4.3
+        12..=15 => (5, level_idx - 12),    // 5.0-5.3
+        16..=19 => (6, level_idx - 16),    // 6.0-6.3
+        20..=23 => (7, level_idx - 20),    // 7.0-7.3
+        24..=31 => (8, level_idx - 24),    // 8.0-8.7
+        _ => (2, 0),
+    };
+    let level = format!("{:02}", major * 2 + minor);
+
+    // Tier: 0 = Main (M), 1 = High (H)
+    let tier = if operating_point.seq_tier { 'H' } else { 'M' };
+
+    // Bit depth: color_config.bit_depth (8, 10, or 12)
+    let bit_depth = format!("{:02}", seq.color_config.bit_depth);
+
+    // Build base codec string: av01.P.LLT.DD
+    let codec_string = format!("av01.{profile}.{level}{tier}.{bit_depth}");
+
+    codec_string
 }
 
 #[inline]
