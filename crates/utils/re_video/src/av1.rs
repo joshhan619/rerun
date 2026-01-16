@@ -195,9 +195,17 @@ mod test {
         match result {
             Ok(GopStartDetection::StartOfGop(details)) => {
                 // Verify we got expected details from the AV1 stream
-                assert_eq!(details.codec_string, "av01");
+                assert!(
+                    details.codec_string.starts_with("av01."),
+                    "Codec string should start with 'av01.': got '{}'",
+                    details.codec_string
+                );
+                assert!(
+                    details.codec_string.ends_with(".08"),
+                    "Codec string should end with '.08' for 8-bit depth: got '{}'",
+                    details.codec_string
+                );
                 assert_eq!(details.coded_dimensions, [64, 64]);
-
                 assert_eq!(details.bit_depth, Some(8));
             }
             Err(err) => panic!("Failed to parse valid AV1 data: {err}"),
